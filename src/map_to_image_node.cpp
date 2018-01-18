@@ -33,9 +33,13 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/image_encodings.h>
 
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.h>
 #include <Eigen/Geometry>
+#include <tf/transform_listener.h>
+#include <tf/tf.h>
 
 #include <hector_map_tools/HectorMapTools.h>
 
@@ -56,7 +60,7 @@ public:
     image_transport_publisher_full_ = image_transport_->advertise("map_image/full", 1);
     image_transport_publisher_tile_ = image_transport_->advertise("map_image/tile", 1);
 
-    // pose_sub_ = n_.subscribe("pose", 1, &MapAsImageProvider::poseCallback, this);
+    pose_sub_ = n_.subscribe("pose", 1, &MapAsImageProvider::poseCallback, this);
     map_sub_ = n_.subscribe("map", 1, &MapAsImageProvider::mapCallback, this);
 
     //Which frame_id makes sense?
@@ -82,49 +86,46 @@ public:
   void poseCallback(const geometry_msgs::PoseStampedConstPtr& pose)
   {
     pose_ptr_ = pose;
+    drawMap();
   }
 
-  //The map->image conversion runs every time a new map is received at the moment
+  //The map_ptr->image conversion runs every time a new map is received at the moment
   void mapCallback(const nav_msgs::OccupancyGridConstPtr& map)
   {
-    int size_x = map->info.width;
-    int size_y = map->info.height;
+    map_ptr = map;
+  }
 
-    std::cout << "OK1" << '\n';
-
-    if ((size_x < 3) || (size_y < 3) ){
-      ROS_INFO("Map size is only x: %d,  y: %d . Not running map to image conversion", size_x, size_y);
-      return;
-    }
-
-    std::cout << "OK2" << '\n';
+  void drawMap(){
 
     // Only if someone is subscribed to it, do work and publish full map image
     if (image_transport_publisher_full_.getNumSubscribers() > 0){
-      cv::Mat* map_mat  = &cv_img_full_.image;
+      if(!(map_ptr))
+        return;
+      int size_x = map_ptr->info.width;
+      int size_y = map_ptr->info.height;
 
-      std::cout << "size_y: " << size_y << '\n';
-      std::cout << "size_x: " << size_x << '\n';
+      if ((size_x < 3) || (size_y < 3) ){
+        ROS_INFO("Map size is only x: %d,  y: %d . Not running map to image conversion", size_x, size_y);
+        return;
+      }
+
+      cv::Mat* map_mat  = &cv_img_full_.image;
 
       // resize cv image if it doesn't have the same dimensions as the map
       if ( (map_mat->rows != size_y) || (map_mat->cols != size_x)){
         *map_mat = cv::Mat(size_y, size_x, CV_8U);
       }
 
-      const std::vector<int8_t>& map_data (map->data);
-
-      std::cout << "OK4" << '\n';
+      const std::vector<int8_t>& map_data (map_ptr->data);
 
       unsigned char *map_mat_data_p=(unsigned char*) map_mat->data;
 
       //We have to flip around the y axis, y for image starts at the top and y for map at the bottom
       int size_y_rev = size_y-1;
 
-      std::cout << "OK5" << '\n';
-
       for (int y = size_y_rev; y >= 0; --y){
 
-        int idx_map_y = size_x * (size_y -y);
+        int idx_map_y = size_x * (size_y_rev -y);
         int idx_img_y = size_x * y;
 
         for (int x = 0; x < size_x; ++x){
@@ -148,11 +149,35 @@ public:
         }
       }
 
-      std::cout << "OK6" << '\n';
+      // draw pose
+      if(pose_ptr_){
+        //pose_ptr_->pose.position.x, pose_ptr_->pose.position.y
+        geometry_msgs::PoseStamped pose_map;
+        try{
+          ros::Time now = ros::Time::now();
+          transform_listener.waitForTransform("/map", pose_ptr_->header.frame_id,
+                              now, ros::Duration(3.0));
+          transform_listener.transformPose("/map", *pose_ptr_, pose_map);
+        }catch(tf::TransformException ex){
+           ROS_ERROR("transfrom exception : %s",ex.what());
+        }
 
+        float resolution = map_ptr->info.resolution;
+        float map_right_pos = pose_ptr_->pose.position.x + map_ptr->info.width * resolution;
+        float map_top_pos = pose_ptr_->pose.position.y + map_ptr->info.height * resolution;
+        if(pose_map.pose.position.x > map_ptr->info.origin.position.x &&
+          pose_map.pose.position.y > map_ptr->info.origin.position.y &&
+          pose_map.pose.position.x < map_right_pos &&
+          pose_map.pose.position.y < map_top_pos
+        ){
+          int pose_x = int((pose_map.pose.position.x - map_ptr->info.origin.position.x) / resolution);
+          int pose_y = size_y - int((pose_map.pose.position.y - map_ptr->info.origin.position.y) / resolution);
+          // draw
+          cv::Point p(pose_x , pose_y);
+          cv::circle(*map_mat, p, 20, cv::Scalar(50), -1);
+        }
+      }
       image_transport_publisher_full_.publish(cv_img_full_.toImageMsg());
-
-      std::cout << "OK7" << '\n';
     }
   }
 
@@ -165,6 +190,7 @@ public:
   image_transport::ImageTransport* image_transport_;
 
   geometry_msgs::PoseStampedConstPtr pose_ptr_;
+  nav_msgs::OccupancyGridConstPtr map_ptr;
 
   cv_bridge::CvImage cv_img_full_;
   cv_bridge::CvImage cv_img_tile_;
@@ -175,7 +201,7 @@ public:
   int p_size_tiled_map_image_x_;
   int p_size_tiled_map_image_y_;
 
-  HectorMapTools::CoordinateTransformer<float> world_map_transformer_;
+  tf::TransformListener transform_listener;
 
 };
 
