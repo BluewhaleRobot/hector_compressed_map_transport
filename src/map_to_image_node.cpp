@@ -62,13 +62,11 @@ public:
 
     pose_sub_ = n_.subscribe("pose", 1, &MapAsImageProvider::poseCallback, this);
     map_sub_ = n_.subscribe("map", 1, &MapAsImageProvider::mapCallback, this);
-
+    std::cout << "OK1" << '\n';
     //Which frame_id makes sense?
     cv_img_full_.header.frame_id = "map_image";
-    cv_img_full_.encoding = sensor_msgs::image_encodings::MONO8;
-
-    cv_img_tile_.header.frame_id = "map_image";
-    cv_img_tile_.encoding = sensor_msgs::image_encodings::MONO8;
+    cv_img_full_.encoding = "bgr8";
+    map_mat = new cv::Mat(1, 1, CV_8U);
 
     //Fixed cell width for tile based image, use dynamic_reconfigure for this later
     p_size_tiled_map_image_x_ = 64;
@@ -109,11 +107,11 @@ public:
         return;
       }
 
-      cv::Mat* map_mat  = &cv_img_full_.image;
-
+      cv::Mat *map_color = &cv_img_full_.image;
       // resize cv image if it doesn't have the same dimensions as the map
       if ( (map_mat->rows != size_y) || (map_mat->cols != size_x)){
         *map_mat = cv::Mat(size_y, size_x, CV_8U);
+        *map_color = cv::Mat(size_y, size_x, CV_8UC3);
       }
 
       const std::vector<int8_t>& map_data (map_ptr->data);
@@ -148,7 +146,7 @@ public:
           }
         }
       }
-
+      cvtColor(*map_mat, *map_color, CV_GRAY2BGR, 3);
       // draw pose
       if(pose_ptr_){
         //pose_ptr_->pose.position.x, pose_ptr_->pose.position.y
@@ -174,7 +172,7 @@ public:
           int pose_y = size_y - int((pose_map.pose.position.y - map_ptr->info.origin.position.y) / resolution);
           // draw
           cv::Point p(pose_x , pose_y);
-          cv::circle(*map_mat, p, 20, cv::Scalar(50), -1);
+          cv::circle(*map_color, p, 5, cv::Scalar(0, 0,255), -1);
         }
       }
       image_transport_publisher_full_.publish(cv_img_full_.toImageMsg());
@@ -193,7 +191,7 @@ public:
   nav_msgs::OccupancyGridConstPtr map_ptr;
 
   cv_bridge::CvImage cv_img_full_;
-  cv_bridge::CvImage cv_img_tile_;
+  cv::Mat *map_mat;
 
   ros::NodeHandle n_;
   ros::NodeHandle pn_;
