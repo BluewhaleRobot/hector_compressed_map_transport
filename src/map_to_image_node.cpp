@@ -41,8 +41,6 @@
 #include <tf/transform_listener.h>
 #include <tf/tf.h>
 
-#include <hector_map_tools/HectorMapTools.h>
-
 using namespace std;
 
 /**
@@ -60,9 +58,8 @@ public:
     image_transport_publisher_full_ = image_transport_->advertise("map_image/full", 1);
     image_transport_publisher_tile_ = image_transport_->advertise("map_image/tile", 1);
 
-    pose_sub_ = n_.subscribe("pose", 1, &MapAsImageProvider::poseCallback, this);
-    map_sub_ = n_.subscribe("map", 1, &MapAsImageProvider::mapCallback, this);
-    std::cout << "OK1" << '\n';
+    pose_sub_ = n_.subscribe("/pose", 1, &MapAsImageProvider::poseCallback, this);
+    map_sub_ = n_.subscribe("/map", 1, &MapAsImageProvider::mapCallback, this);
     //Which frame_id makes sense?
     cv_img_full_.header.frame_id = "map_image";
     cv_img_full_.encoding = "bgr8";
@@ -84,7 +81,6 @@ public:
   void poseCallback(const geometry_msgs::PoseStampedConstPtr& pose)
   {
     pose_ptr_ = pose;
-    drawMap();
   }
 
   //The map_ptr->image conversion runs every time a new map is received at the moment
@@ -94,7 +90,6 @@ public:
   }
 
   void drawMap(){
-
     // Only if someone is subscribed to it, do work and publish full map image
     if (image_transport_publisher_full_.getNumSubscribers() > 0){
       if(!(map_ptr))
@@ -206,10 +201,13 @@ public:
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "map_to_image_node");
+  MapAsImageProvider mapAsImageProvider;
+  ros::Rate r(30);
 
-  MapAsImageProvider map_image_provider;
-
-  ros::spin();
-
+  while (ros::ok()) {
+    ros::spinOnce();
+    mapAsImageProvider.drawMap();
+    r.sleep();
+  }
   return 0;
 }
