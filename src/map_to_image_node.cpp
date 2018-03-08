@@ -124,8 +124,11 @@ public:
         for (int x = 0; x < size_x; ++x){
 
           int idx = idx_img_y + x;
+          int8_t mapGrid_data_temp = map_data[idx_map_y + x];
 
-          switch (map_data[idx_map_y + x])
+          if(mapGrid_data_temp>100) mapGrid_data_temp=100;
+
+          switch (mapGrid_data_temp)
           {
           case -1:
             map_mat_data_p[idx] = 127;
@@ -135,8 +138,8 @@ public:
             map_mat_data_p[idx] = 255;
             break;
 
-          case 100:
-            map_mat_data_p[idx] = 0;
+          default:
+            map_mat_data_p[idx] = (100 - mapGrid_data_temp)*255/100;
             break;
           }
         }
