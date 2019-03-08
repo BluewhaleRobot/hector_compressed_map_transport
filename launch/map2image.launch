@@ -1,0 +1,6 @@
+<launch>
+  <node pkg="hector_compressed_map_transport" type="map_to_image_node" name="map_to_image_node1" respawn="true" respawn_delay="10">
+    <remap from="/odom" to="/xqserial_server/Odom" />
+    <!-- <remap from="/odom" to="/bWmono/Odom" /> -->
+  </node>
+</launch>

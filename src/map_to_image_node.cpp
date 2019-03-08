@@ -32,6 +32,7 @@
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/image_encodings.h>
+#include <nav_msgs/Odometry.h>
 
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -40,6 +41,7 @@
 #include <Eigen/Geometry>
 #include <tf/transform_listener.h>
 #include <tf/tf.h>
+#include <opencv2/core/core.hpp>
 
 using namespace std;
 
@@ -58,7 +60,7 @@ public:
     image_transport_publisher_full_ = image_transport_->advertise("map_image/full", 1);
     image_transport_publisher_tile_ = image_transport_->advertise("map_image/tile", 1);
 
-    pose_sub_ = n_.subscribe("/pose", 1, &MapAsImageProvider::poseCallback, this);
+    odom_sub_ = n_.subscribe("/odom", 1, &MapAsImageProvider::odomCallback, this);
     map_sub_ = n_.subscribe("/map", 1, &MapAsImageProvider::mapCallback, this);
     //Which frame_id makes sense?
     cv_img_full_.header.frame_id = "map_image";
@@ -70,6 +72,32 @@ public:
     p_size_tiled_map_image_y_ = 64;
 
     ROS_INFO("Map to Image node started.");
+
+    mCurrentPos_ = geometry_msgs::PoseStamped();
+    mPoseUpdate_ = false;
+
+  	pose_points = new cv::Point[4];
+  	pose_points[0] = cv::Point(-6, 6);
+  	pose_points[1] = cv::Point(10, 0);
+  	pose_points[2] = cv::Point(-6, 6);
+  	pose_points[3] = cv::Point(0, 0);
+  	pose_npts = 4;
+
+     mat_point0 = cv::Mat::eye(4, 4, CV_32F);
+     mat_point0.at<float>(0,3) = -6;
+     mat_point0.at<float>(1,3) = -6;
+
+     mat_point1 = cv::Mat::eye(4, 4, CV_32F);
+     mat_point1.at<float>(0,3) = 10;
+     mat_point1.at<float>(1,3) = 0;
+
+     mat_point2 = cv::Mat::eye(4, 4, CV_32F);
+     mat_point2.at<float>(0,3) = -6;
+     mat_point2.at<float>(1,3) = 6;
+
+     mat_point3 = cv::Mat::eye(4, 4, CV_32F);
+     mat_point3.at<float>(0,3) = 0;
+     mat_point3.at<float>(1,3) = 0;
   }
 
   ~MapAsImageProvider()
@@ -78,9 +106,11 @@ public:
   }
 
   //We assume the robot position is available as a PoseStamped here (querying tf would be the more general option)
-  void poseCallback(const geometry_msgs::PoseStampedConstPtr& pose)
+  void odomCallback(const nav_msgs::OdometryConstPtr& odom)
   {
-    pose_ptr_ = pose;
+    mCurrentPos_.header = odom->header;
+    mCurrentPos_.pose = odom->pose.pose;
+    mPoseUpdate_ = true;
   }
 
   //The map_ptr->image conversion runs every time a new map is received at the moment
@@ -146,21 +176,21 @@ public:
       }
       cvtColor(*map_mat, *map_color, CV_GRAY2BGR, 3);
       // draw pose
-      if(pose_ptr_){
-        //pose_ptr_->pose.position.x, pose_ptr_->pose.position.y
+      if(mPoseUpdate_){
+
         geometry_msgs::PoseStamped pose_map;
         try{
-          ros::Time now = ros::Time::now();
-          transform_listener.waitForTransform("/map", pose_ptr_->header.frame_id,
+          ros::Time now = mCurrentPos_.header.stamp;
+          transform_listener.waitForTransform("/map", mCurrentPos_.header.frame_id,
                               now, ros::Duration(3.0));
-          transform_listener.transformPose("/map", *pose_ptr_, pose_map);
+          transform_listener.transformPose("/map", mCurrentPos_, pose_map);
         }catch(tf::TransformException ex){
            ROS_ERROR("transfrom exception : %s",ex.what());
         }
 
         float resolution = map_ptr->info.resolution;
-        float map_right_pos = pose_ptr_->pose.position.x + map_ptr->info.width * resolution;
-        float map_top_pos = pose_ptr_->pose.position.y + map_ptr->info.height * resolution;
+        float map_right_pos = map_ptr->info.origin.position.x + map_ptr->info.width * resolution; //pose_ptr_->pose.position.x + map_ptr->info.width * resolution;
+        float map_top_pos = map_ptr->info.origin.position.y + map_ptr->info.height* resolution; //pose_ptr_->pose.position.y + map_ptr->info.height * resolution;
         if(pose_map.pose.position.x > map_ptr->info.origin.position.x &&
           pose_map.pose.position.y > map_ptr->info.origin.position.y &&
           pose_map.pose.position.x < map_right_pos &&
@@ -168,9 +198,39 @@ public:
         ){
           int pose_x = int((pose_map.pose.position.x - map_ptr->info.origin.position.x) / resolution);
           int pose_y = size_y - int((pose_map.pose.position.y - map_ptr->info.origin.position.y) / resolution);
+
+          //transform points
+          tf::Matrix3x3 Rbc(tf::Quaternion(pose_map.pose.orientation.x, pose_map.pose.orientation.y, pose_map.pose.orientation.z, pose_map.pose.orientation.w));
+          cv::Mat Tbc = cv::Mat::eye(4, 4, CV_32F);
+          for (int i = 0; i < 3; i++)
+          {
+              tf::Vector3 v = Rbc.getColumn(i);
+              Tbc.at<float>(0, i) = v.getX();
+              Tbc.at<float>(1, i) = v.getY();
+              Tbc.at<float>(2, i) = v.getZ();
+          }
+          cv::Mat point0 = Tbc*mat_point0;
+          cv::Mat point1 = Tbc*mat_point1;
+          cv::Mat point2 = Tbc*mat_point2;
+          cv::Mat point3 = Tbc*mat_point3;
+
+        	pose_points[0].x = pose_x+int(point0.at<float>(0,3));
+          pose_points[0].y = pose_y-int(point0.at<float>(1,3));
+
+          pose_points[1].x = pose_x+int(point1.at<float>(0,3));
+          pose_points[1].y = pose_y-int(point1.at<float>(1,3));
+
+          pose_points[2].x = pose_x+int(point2.at<float>(0,3));
+          pose_points[2].y = pose_y-int(point2.at<float>(1,3));
+
+          pose_points[3].x = pose_x+int(point3.at<float>(0,3));
+          pose_points[3].y = pose_y-int(point3.at<float>(1,3));
+
+          //cv::fillConvexPoly(*map_color, pose_points, pose_npts, cv::Scalar(0, 0,255));
           // draw
           cv::Point p(pose_x , pose_y);
           cv::circle(*map_color, p, 5, cv::Scalar(0, 0,255), -1);
+
         }
       }
       image_transport_publisher_full_.publish(cv_img_full_.toImageMsg());
@@ -178,14 +238,15 @@ public:
   }
 
   ros::Subscriber map_sub_;
-  ros::Subscriber pose_sub_;
+  ros::Subscriber odom_sub_;
 
   image_transport::Publisher image_transport_publisher_full_;
   image_transport::Publisher image_transport_publisher_tile_;
 
   image_transport::ImageTransport* image_transport_;
 
-  geometry_msgs::PoseStampedConstPtr pose_ptr_;
+  geometry_msgs::PoseStamped mCurrentPos_;
+  bool mPoseUpdate_;
   nav_msgs::OccupancyGridConstPtr map_ptr;
 
   cv_bridge::CvImage cv_img_full_;
@@ -199,6 +260,12 @@ public:
 
   tf::TransformListener transform_listener;
 
+  int pose_npts;
+  cv::Point * pose_points;
+  cv::Mat mat_point0;
+  cv::Mat mat_point1;
+  cv::Mat mat_point2;
+  cv::Mat mat_point3;
 };
 
 int main(int argc, char** argv)
